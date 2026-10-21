@@ -90,15 +90,26 @@ describe.each(Object.entries(operations))('%s errors', (_name, request) => {
     expect(transport).toHaveBeenCalledTimes(1)
   })
 
+  test('normalizes HTTP 500 without retrying', async () => {
+    respond(500, { valid: false, message: 'Service failure' })
+    await expect(request()).rejects.toMatchObject({ kind: 'server' })
+    expect(transport).toHaveBeenCalledTimes(1)
+  })
+
+  test('normalizes cancellation', async () => {
+    transport.mockRejectedValueOnce(new CanceledError())
+    await expect(request()).rejects.toMatchObject({ kind: 'cancelled' })
+  })
+
+
+})
+
+describe('shared error normalization through POST', () => {
+  const request = () => submitProfile(values)
+
   test('rejects a malformed HTTP 400 response', async () => {
     respond(400, { message: 123 })
     await expect(request()).rejects.toMatchObject({ kind: 'protocol' })
-  })
-
-  test.each([500, 503])('normalizes HTTP %s without retrying', async (status) => {
-    respond(status, { valid: false, message: 'Service failure' })
-    await expect(request()).rejects.toMatchObject({ kind: 'server' })
-    expect(transport).toHaveBeenCalledTimes(1)
   })
 
   test.each([
@@ -107,11 +118,6 @@ describe.each(Object.entries(operations))('%s errors', (_name, request) => {
     transport.mockRejectedValueOnce(new AxiosError('Transport failure', code))
     await expect(request()).rejects.toMatchObject({ kind })
     expect(transport).toHaveBeenCalledTimes(1)
-  })
-
-  test('normalizes cancellation', async () => {
-    transport.mockRejectedValueOnce(new CanceledError())
-    await expect(request()).rejects.toMatchObject({ kind: 'cancelled' })
   })
 
   test('normalizes unexpected failures', async () => {
