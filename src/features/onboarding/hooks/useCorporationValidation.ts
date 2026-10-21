@@ -13,6 +13,7 @@ export function useCorporationValidation({ getValues, setError, clearErrors, get
   const active = useRef<Request | null>(null)
   const verified = useRef<string | null>(null)
   const mounted = useRef(false)
+  const remoteError = useRef<{ number: string; message: string } | null>(null)
 
   useEffect(() => {
     mounted.current = true
@@ -27,6 +28,7 @@ export function useCorporationValidation({ getValues, setError, clearErrors, get
     active.current?.controller.abort()
     active.current = null
     verified.current = null
+    remoteError.current = null
     setStatus('idle')
     if (getFieldState('corporationNumber').error?.type === 'remote') {
       clearErrors('corporationNumber')
@@ -54,20 +56,20 @@ export function useCorporationValidation({ getValues, setError, clearErrors, get
         const result = await checkCorporationNumber(number, controller.signal)
         if (!isCurrent()) return false
         if (result.valid) {
+          remoteError.current = null
           verified.current = number
           clearErrors('corporationNumber')
           setStatus('valid')
           return true
         }
+        remoteError.current = { number, message: result.message }
         setError('corporationNumber', { type: 'remote', message: result.message })
         setStatus('invalid')
         return false
       } catch {
         if (!isCurrent()) return false
-        setError('corporationNumber', {
-          type: 'remote',
-          message: 'Unable to verify the corporation number. Please try again.',
-        })
+        remoteError.current = { number, message: 'Unable to verify the corporation number. Please try again.' }
+        restoreError()
         setStatus('unavailable')
         return false
       } finally {
@@ -77,5 +79,12 @@ export function useCorporationValidation({ getValues, setError, clearErrors, get
     return request.promise
   }
 
-  return { status, verify, invalidate }
+  function restoreError() {
+    const error = remoteError.current
+    if (mounted.current && error?.number === getValues('corporationNumber')) {
+      setError('corporationNumber', { type: 'remote', message: error.message })
+    }
+  }
+
+  return { status, verify, invalidate, restoreError }
 }

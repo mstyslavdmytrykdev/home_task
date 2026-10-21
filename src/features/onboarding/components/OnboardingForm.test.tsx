@@ -1,11 +1,14 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
-import { checkCorporationNumber } from '../api/onboardingApi'
+import { ApiError } from '../../../shared/api/errors'
+import { checkCorporationNumber, submitProfile } from '../api/onboardingApi'
 
 vi.mock('../api/onboardingApi', () => ({ checkCorporationNumber: vi.fn(), submitProfile: vi.fn() }))
 
 beforeEach(() => {
+  vi.mocked(submitProfile).mockReset()
+  vi.mocked(submitProfile).mockResolvedValue(undefined)
   vi.mocked(checkCorporationNumber).mockReset()
   vi.mocked(checkCorporationNumber).mockResolvedValue({ valid: true, corporationNumber: '012345678' })
 })
@@ -136,19 +139,24 @@ test.each(['12345678', 'ABC123456', '         '])('does not verify malformed cor
 
 test('shows pending status, caches successful verification and shares blur with submit', async () => {
   const pending = deferred<{ valid: true; corporationNumber: string }>()
+  vi.mocked(submitProfile).mockRejectedValue(new ApiError('server', 'Service unavailable'))
   vi.mocked(checkCorporationNumber).mockReturnValueOnce(pending.promise)
   const user = userEvent.setup()
   render(<OnboardingForm />)
   const input = screen.getByRole('textbox', { name: 'Corporation Number' })
+  await user.type(screen.getByRole('textbox', { name: 'First Name' }), 'Jane')
+  await user.type(screen.getByRole('textbox', { name: 'Last Name' }), 'Smith')
+  await user.type(screen.getByRole('textbox', { name: 'Phone Number' }), '+13062776103')
   await user.type(input, '123456789')
   await user.click(screen.getByRole('button', { name: 'Submit' }))
   expect(await screen.findByText('Checking corporation number…')).toBeVisible()
   expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
   await act(async () => pending.resolve({ valid: true, corporationNumber: '123456789' }))
+  await screen.findByRole('button', { name: 'Try again' })
   expect(screen.getByRole('status')).toBeEmptyDOMElement()
   await user.click(input)
   await user.tab()
-  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  await user.click(screen.getByRole('button', { name: 'Try again' }))
   expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
 })
 
@@ -218,4 +226,121 @@ test('aborts pending verification on unmount', async () => {
   unmount()
   expect(signal?.aborted).toBe(true)
   await act(async () => pending.resolve({ valid: true, corporationNumber: '012345678' }))
+})
+
+async function fillValidForm(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(screen.getByRole('textbox', { name: 'First Name' }), ' Jane ')
+  await user.type(screen.getByRole('textbox', { name: 'Last Name' }), ' Smith ')
+  await user.type(screen.getByRole('textbox', { name: 'Phone Number' }), '+13062776103')
+  await user.type(screen.getByRole('textbox', { name: 'Corporation Number' }), '012345678')
+}
+
+test('verifies corporation before POST and focuses the successful completion heading', async () => {
+  const verification = deferred<{ valid: true; corporationNumber: string }>()
+  vi.mocked(checkCorporationNumber).mockReturnValueOnce(verification.promise)
+  const user = userEvent.setup()
+  render(<OnboardingForm />)
+  await fillValidForm(user)
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(await screen.findByRole('button', { name: 'Submitting…' })).toBeDisabled()
+  expect(submitProfile).not.toHaveBeenCalled()
+  await act(async () => verification.resolve({ valid: true, corporationNumber: '012345678' }))
+  const heading = await screen.findByRole('heading', { name: 'Details submitted' })
+  expect(heading).toHaveFocus()
+  expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
+  expect(submitProfile).toHaveBeenCalledExactlyOnceWith({
+    firstName: 'Jane', lastName: 'Smith', phone: '+13062776103', corporationNumber: '012345678',
+  }, expect.any(AbortSignal))
+})
+
+test('empty submit does not verify or POST', async () => {
+  const user = userEvent.setup()
+  render(<OnboardingForm />)
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  await screen.findByText('First name is required')
+  expect(checkCorporationNumber).not.toHaveBeenCalled()
+  expect(submitProfile).not.toHaveBeenCalled()
+})
+
+test.each([
+  { valid: false as const, message: 'Invalid corporation number' },
+  new ApiError('network', 'Offline'),
+])('blocks POST when corporation verification fails (%j)', async (result) => {
+  if (result instanceof Error) vi.mocked(checkCorporationNumber).mockRejectedValue(result)
+  else vi.mocked(checkCorporationNumber).mockResolvedValue(result)
+  const user = userEvent.setup()
+  render(<OnboardingForm />)
+  await fillValidForm(user)
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  await screen.findByText(result instanceof Error
+    ? 'Unable to verify the corporation number. Please try again.'
+    : result.message)
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Submit' })).toBeEnabled())
+  expect(submitProfile).not.toHaveBeenCalled()
+  expect(screen.getByRole('textbox', { name: 'Corporation Number' })).toHaveFocus()
+})
+
+test('maps backend invalid phone to its field and allows correction and resubmission', async () => {
+  vi.mocked(submitProfile).mockRejectedValueOnce(new ApiError('validation', 'Invalid phone number'))
+  const user = userEvent.setup()
+  render(<OnboardingForm />)
+  await fillValidForm(user)
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(await screen.findByText('Invalid phone number')).toBeVisible()
+  const phone = screen.getByRole('textbox', { name: 'Phone Number' })
+  expect(phone).toHaveAccessibleDescription('Invalid phone number')
+  expect(phone).toHaveFocus()
+  expect(phone).toHaveValue('+13062776103')
+  await user.clear(phone)
+  await user.type(phone, '+14165551234')
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(await screen.findByRole('heading', { name: 'Details submitted' })).toBeVisible()
+  expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
+  expect(submitProfile).toHaveBeenCalledTimes(2)
+})
+
+test.each(['server', 'network', 'timeout', 'validation'] as const)('preserves values after %s failure and retries only on request', async (kind) => {
+  vi.mocked(submitProfile).mockRejectedValueOnce(new ApiError(kind, 'Please try again later'))
+  const user = userEvent.setup()
+  render(<OnboardingForm />)
+  await fillValidForm(user)
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Please try again later')
+  expect(screen.getByRole('textbox', { name: 'First Name' })).toHaveValue(' Jane ')
+  expect(screen.getByRole('textbox', { name: 'Corporation Number' })).toHaveValue('012345678')
+  expect(submitProfile).toHaveBeenCalledTimes(1)
+  await user.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(await screen.findByRole('heading', { name: 'Details submitted' })).toBeVisible()
+  expect(submitProfile).toHaveBeenCalledTimes(2)
+  expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
+})
+
+test('prevents duplicate POST and editing while submission is pending', async () => {
+  const pending = deferred<void>()
+  vi.mocked(submitProfile).mockReturnValueOnce(pending.promise)
+  const user = userEvent.setup()
+  render(<OnboardingForm />)
+  await fillValidForm(user)
+  await user.dblClick(screen.getByRole('button', { name: 'Submit' }))
+  await waitFor(() => expect(submitProfile).toHaveBeenCalledTimes(1))
+  expect(screen.getByRole('button', { name: 'Submitting…' })).toBeDisabled()
+  await user.type(screen.getByRole('textbox', { name: 'First Name' }), 'changed')
+  expect(screen.getByRole('textbox', { name: 'First Name' })).toHaveValue(' Jane ')
+  await act(async () => pending.resolve())
+  expect(await screen.findByRole('heading', { name: 'Details submitted' })).toBeVisible()
+  expect(submitProfile).toHaveBeenCalledTimes(1)
+})
+
+test('aborts pending POST on unmount and ignores its eventual completion', async () => {
+  const pending = deferred<void>()
+  vi.mocked(submitProfile).mockReturnValueOnce(pending.promise)
+  const user = userEvent.setup()
+  const { unmount } = render(<OnboardingForm />)
+  await fillValidForm(user)
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  await waitFor(() => expect(submitProfile).toHaveBeenCalledTimes(1))
+  const signal = vi.mocked(submitProfile).mock.calls[0][1]
+  unmount()
+  expect(signal?.aborted).toBe(true)
+  await act(async () => pending.resolve())
 })
