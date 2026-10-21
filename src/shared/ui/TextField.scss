@@ -1,0 +1,44 @@
+.text-field {
+  min-width: 0;
+
+  &__label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 400;
+  }
+
+  &__input {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    min-height: 3.25rem;
+    padding: 0.75rem;
+    border: 1px solid #d2d2d2;
+    border-radius: 0.75rem;
+    background: #fff;
+    color: inherit;
+    font: inherit;
+
+    &:focus-visible {
+      outline: 2px solid #171717;
+      outline-offset: 3px;
+    }
+  }
+
+  &__hint,
+  &__error {
+    margin: 0.5rem 0 0;
+    font-size: 0.875rem;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  &__hint {
+    color: #595959;
+  }
+
+  &__error {
+    color: #c00;
+  }
+}

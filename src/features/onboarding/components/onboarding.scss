@@ -1,0 +1,82 @@
+.onboarding-page {
+  min-height: 100svh;
+  padding: 3rem 1.5rem 5rem;
+
+  &__step {
+    margin: 0;
+    text-align: center;
+    font-size: 1.25rem;
+  }
+
+  @media (max-width: 480px) {
+    padding: 2rem 1rem;
+  }
+}
+
+.onboarding-form {
+  width: 100%;
+  max-width: 37.5rem;
+  margin: 7.5rem auto 0;
+  padding: 1.875rem;
+  border: 1px solid #dedede;
+  border-radius: 1.25rem;
+  background: #fff;
+
+  h1 {
+    margin: 0 0 1.875rem;
+    text-align: center;
+    font-size: 1.75rem;
+    font-weight: 400;
+    line-height: 1.25;
+  }
+
+  &__fields {
+    display: grid;
+    gap: 1.5rem;
+  }
+
+  &__names {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.5rem;
+  }
+
+  &__submit {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    width: 100%;
+    min-height: 3.25rem;
+    margin-top: 2rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid #000;
+    border-radius: 0.75rem;
+    background: #000;
+    color: #fff;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover {
+      background: #262626;
+    }
+
+    &:focus-visible {
+      outline: 2px solid #171717;
+      outline-offset: 3px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    margin-top: 3rem;
+    padding: 1.5rem;
+
+    h1 {
+      font-size: 1.5rem;
+    }
+
+    &__names {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+}
