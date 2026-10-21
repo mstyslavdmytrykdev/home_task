@@ -37,7 +37,7 @@ export default function TextField({
         aria-describedby={descriptionIds}
       />
       {hint && <p className="text-field__hint" id={`${inputId}-hint`}>{hint}</p>}
-      {error && <p className="text-field__error" id={`${inputId}-error`}>{error}</p>}
+      <p className="text-field__error" id={`${inputId}-error`}>{error}</p>
     </div>
   )
 }

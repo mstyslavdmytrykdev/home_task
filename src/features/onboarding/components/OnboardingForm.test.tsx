@@ -14,9 +14,13 @@ beforeEach(() => {
   vi.mocked(checkCorporationNumber).mockResolvedValue({ valid: true, corporationNumber: '012345678' })
 })
 
-test('validates untouched fields on submit and focuses the first invalid field', async () => {
+function setupForm() {
   const user = userEvent.setup()
-  render(<OnboardingForm />)
+  return { user, ...render(<OnboardingForm />) }
+}
+
+test('validates untouched fields on submit and focuses the first invalid field', async () => {
+  const { user } = setupForm()
   await user.click(screen.getByRole('button', { name: 'Submit' }))
 
   for (const [label, message] of [
@@ -31,28 +35,33 @@ test('validates untouched fields on submit and focuses the first invalid field',
     expect(screen.getByRole('textbox', { name: label })).toBeRequired()
   }
   expect(screen.getByRole('textbox', { name: 'First Name' })).toHaveFocus()
+  expect(screen.getAllByText(/^Please review:/)).toHaveLength(1)
+  expect(screen.getByText(/^Please review:/)).toHaveTextContent('First name is required. Last name is required. Phone number is required. Corporation number is required')
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   expect(checkCorporationNumber).not.toHaveBeenCalled()
   expect(submitProfile).not.toHaveBeenCalled()
 })
 
 test('shows name errors on blur and clears them only after correction is blurred', async () => {
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   const input = screen.getByRole('textbox', { name: 'First Name' })
   await user.type(input, '   ')
   expect(screen.queryByText('First name is required')).not.toBeInTheDocument()
   await user.tab()
   expect(await screen.findByText('First name is required')).toBeVisible()
+  const announcement = screen.getByText('Please review: First name is required')
+  expect(announcement).toHaveAttribute('aria-live', 'polite')
+  expect(announcement).toHaveAttribute('aria-atomic', 'true')
   await user.clear(input)
   await user.type(input, 'Jane')
   expect(screen.getByText('First name is required')).toBeVisible()
   await user.tab()
   await waitFor(() => expect(screen.queryByText('First name is required')).not.toBeInTheDocument())
+  expect(announcement).not.toHaveTextContent('First name is required')
 })
 
 test.each(['First Name', 'Last Name'])('caps pasted %s at 50 characters', async (label) => {
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   const input = screen.getByRole('textbox', { name: label })
   await user.click(input)
   await user.paste('a'.repeat(51))
@@ -60,22 +69,20 @@ test.each(['First Name', 'Last Name'])('caps pasted %s at 50 characters', async 
 })
 
 test('rejects a US phone on blur and accepts a corrected Canadian number', async () => {
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   const phone = screen.getByRole('textbox', { name: 'Phone Number' })
   await user.type(phone, '+14155552671')
-  expect(screen.queryByText(/Enter a valid Canadian/)).not.toBeInTheDocument()
+  expect(screen.queryByText(/^Enter a valid Canadian/)).not.toBeInTheDocument()
   await user.tab()
-  expect(await screen.findByText(/Enter a valid Canadian/)).toBeVisible()
+  expect(await screen.findByText(/^Enter a valid Canadian/)).toBeVisible()
   await user.clear(phone)
   await user.type(phone, '+13062776103')
   await user.tab()
-  await waitFor(() => expect(screen.queryByText(/Enter a valid Canadian/)).not.toBeInTheDocument())
+  await waitFor(() => expect(screen.queryByText(/^Enter a valid Canadian/)).not.toBeInTheDocument())
 })
 
 test('validates corporation length on blur and preserves leading zeros', async () => {
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   const corporation = screen.getByRole('textbox', { name: 'Corporation Number' })
   await user.type(corporation, '01234567')
   await user.tab()
@@ -90,8 +97,7 @@ test.each([
   ['Phone Number', 'Phone number is required'],
   ['Corporation Number', 'Corporation number is required'],
 ])('shows the required error for %s on blur', async (label, message) => {
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   const input = screen.getByRole('textbox', { name: label })
   await user.click(input)
   expect(screen.queryByText(message)).not.toBeInTheDocument()
@@ -101,8 +107,7 @@ test.each([
 })
 
 test('caps pasted corporation input at nine characters while retaining leading zeros', async () => {
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   const input = screen.getByRole('textbox', { name: 'Corporation Number' })
   expect(input).toHaveAttribute('type', 'text')
   expect(input).toHaveAttribute('inputmode', 'numeric')
@@ -119,8 +124,7 @@ function deferred<T>() {
 }
 
 test.each(['12345678', 'ABC123456', '         '])('does not verify malformed corporation input %j', async (value) => {
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   await user.type(screen.getByRole('textbox', { name: 'Corporation Number' }), value)
   await user.tab()
   expect(await screen.findByText('Corporation number must be exactly 9 digits')).toBeVisible()
@@ -128,33 +132,9 @@ test.each(['12345678', 'ABC123456', '         '])('does not verify malformed cor
   expect(checkCorporationNumber).not.toHaveBeenCalled()
 })
 
-test('shows pending status, caches successful verification and shares blur with submit', async () => {
-  const pending = deferred<{ valid: true; corporationNumber: string }>()
-  vi.mocked(submitProfile).mockRejectedValue(new ApiError('server', 'Service unavailable'))
-  vi.mocked(checkCorporationNumber).mockReturnValueOnce(pending.promise)
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
-  const input = screen.getByRole('textbox', { name: 'Corporation Number' })
-  await user.type(screen.getByRole('textbox', { name: 'First Name' }), 'Jane')
-  await user.type(screen.getByRole('textbox', { name: 'Last Name' }), 'Smith')
-  await user.type(screen.getByRole('textbox', { name: 'Phone Number' }), '+13062776103')
-  await user.type(input, '123456789')
-  await user.click(screen.getByRole('button', { name: 'Submit' }))
-  expect(await screen.findByText('Checking corporation number…')).toBeVisible()
-  expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
-  await act(async () => pending.resolve({ valid: true, corporationNumber: '123456789' }))
-  await screen.findByRole('button', { name: 'Try again' })
-  expect(screen.getByRole('status')).toBeEmptyDOMElement()
-  await user.click(input)
-  await user.tab()
-  await user.click(screen.getByRole('button', { name: 'Try again' }))
-  expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
-})
-
 test('keeps business invalidity in the RHF field error across submit validation', async () => {
   vi.mocked(checkCorporationNumber).mockResolvedValue({ valid: false, message: 'Invalid corporation number' })
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   const input = screen.getByRole('textbox', { name: 'Corporation Number' })
   await user.type(input, '000000000')
   await user.tab()
@@ -168,8 +148,7 @@ test('keeps business invalidity in the RHF field error across submit validation'
 
 test('distinguishes verification failure and permits retry on blur', async () => {
   vi.mocked(checkCorporationNumber).mockRejectedValueOnce(new Error('Offline'))
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   const input = screen.getByRole('textbox', { name: 'Corporation Number' })
   await user.type(input, '012345678')
   await user.tab()
@@ -183,8 +162,7 @@ test('distinguishes verification failure and permits retry on blur', async () =>
 test.each(['invalid', 'failure'] as const)('ignores a stale %s response even after abort', async (outcome) => {
   const old = deferred<{ valid: false; message: string }>()
   vi.mocked(checkCorporationNumber).mockReturnValueOnce(old.promise)
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   const input = screen.getByRole('textbox', { name: 'Corporation Number' })
   await user.type(input, '000000000')
   await user.tab()
@@ -208,8 +186,7 @@ test.each(['invalid', 'failure'] as const)('ignores a stale %s response even aft
 test('aborts pending verification on unmount', async () => {
   const pending = deferred<{ valid: true; corporationNumber: string }>()
   vi.mocked(checkCorporationNumber).mockReturnValueOnce(pending.promise)
-  const user = userEvent.setup()
-  const { unmount } = render(<OnboardingForm />)
+  const { user, unmount } = setupForm()
   await user.type(screen.getByRole('textbox', { name: 'Corporation Number' }), '012345678')
   await user.tab()
   await waitFor(() => expect(checkCorporationNumber).toHaveBeenCalledTimes(1))
@@ -226,18 +203,19 @@ async function fillValidForm(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByRole('textbox', { name: 'Corporation Number' }), '012345678')
 }
 
-test('verifies corporation before POST and focuses the successful completion heading', async () => {
+test('shares blur verification with submit and sends the exact payload before inline success', async () => {
   const verification = deferred<{ valid: true; corporationNumber: string }>()
   vi.mocked(checkCorporationNumber).mockReturnValueOnce(verification.promise)
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   await fillValidForm(user)
   await user.click(screen.getByRole('button', { name: 'Submit' }))
-  expect(await screen.findByRole('button', { name: 'Submitting…' })).toBeDisabled()
+  expect(await screen.findByRole('button', { name: 'Verifying…' })).toBeDisabled()
   expect(submitProfile).not.toHaveBeenCalled()
   await act(async () => verification.resolve({ valid: true, corporationNumber: '012345678' }))
-  const heading = await screen.findByRole('heading', { name: 'Details submitted' })
-  expect(heading).toHaveFocus()
+  expect(await screen.findByText('Details submitted successfully.')).toBeVisible()
+  expect(screen.getByRole('form', { name: 'Onboarding Form' })).toBeVisible()
+  expect(screen.getByRole('textbox', { name: 'First Name' })).toHaveValue(' Jane ')
+  expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled()
   expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
   expect(submitProfile).toHaveBeenCalledExactlyOnceWith({
     firstName: 'Jane', lastName: 'Smith', phone: '+13062776103', corporationNumber: '012345678',
@@ -250,8 +228,7 @@ test.each([
 ])('blocks POST when corporation verification fails (%j)', async (result) => {
   if (result instanceof Error) vi.mocked(checkCorporationNumber).mockRejectedValue(result)
   else vi.mocked(checkCorporationNumber).mockResolvedValue(result)
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   await fillValidForm(user)
   await user.click(screen.getByRole('button', { name: 'Submit' }))
   await screen.findByText(result instanceof Error
@@ -262,37 +239,17 @@ test.each([
   expect(screen.getByRole('textbox', { name: 'Corporation Number' })).toHaveFocus()
 })
 
-test('maps backend invalid phone to its field and allows correction and resubmission', async () => {
-  vi.mocked(submitProfile).mockRejectedValueOnce(new ApiError('validation', 'Invalid phone number'))
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
-  await fillValidForm(user)
-  await user.click(screen.getByRole('button', { name: 'Submit' }))
-  expect(await screen.findByText('Invalid phone number')).toBeVisible()
-  const phone = screen.getByRole('textbox', { name: 'Phone Number' })
-  expect(phone).toHaveAccessibleDescription('Invalid phone number')
-  expect(phone).toHaveFocus()
-  expect(phone).toHaveValue('+13062776103')
-  await user.clear(phone)
-  await user.type(phone, '+14165551234')
-  await user.click(screen.getByRole('button', { name: 'Submit' }))
-  expect(await screen.findByRole('heading', { name: 'Details submitted' })).toBeVisible()
-  expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
-  expect(submitProfile).toHaveBeenCalledTimes(2)
-})
-
 test.each(['server', 'validation'] as const)('preserves values after %s failure and retries only on request', async (kind) => {
   vi.mocked(submitProfile).mockRejectedValueOnce(new ApiError(kind, 'Please try again later'))
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   await fillValidForm(user)
   await user.click(screen.getByRole('button', { name: 'Submit' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('Please try again later')
   expect(screen.getByRole('textbox', { name: 'First Name' })).toHaveValue(' Jane ')
   expect(screen.getByRole('textbox', { name: 'Corporation Number' })).toHaveValue('012345678')
   expect(submitProfile).toHaveBeenCalledTimes(1)
-  await user.click(screen.getByRole('button', { name: 'Try again' }))
-  expect(await screen.findByRole('heading', { name: 'Details submitted' })).toBeVisible()
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(await screen.findByText('Details submitted successfully.')).toBeVisible()
   expect(submitProfile).toHaveBeenCalledTimes(2)
   expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
 })
@@ -300,8 +257,7 @@ test.each(['server', 'validation'] as const)('preserves values after %s failure 
 test('prevents duplicate POST and editing while submission is pending', async () => {
   const pending = deferred<void>()
   vi.mocked(submitProfile).mockReturnValueOnce(pending.promise)
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   await fillValidForm(user)
   await user.dblClick(screen.getByRole('button', { name: 'Submit' }))
   await waitFor(() => expect(submitProfile).toHaveBeenCalledTimes(1))
@@ -309,15 +265,14 @@ test('prevents duplicate POST and editing while submission is pending', async ()
   await user.type(screen.getByRole('textbox', { name: 'First Name' }), 'changed')
   expect(screen.getByRole('textbox', { name: 'First Name' })).toHaveValue(' Jane ')
   await act(async () => pending.resolve())
-  expect(await screen.findByRole('heading', { name: 'Details submitted' })).toBeVisible()
+  expect(await screen.findByText('Details submitted successfully.')).toBeVisible()
   expect(submitProfile).toHaveBeenCalledTimes(1)
 })
 
 test('aborts pending POST on unmount and ignores its eventual completion', async () => {
   const pending = deferred<void>()
   vi.mocked(submitProfile).mockReturnValueOnce(pending.promise)
-  const user = userEvent.setup()
-  const { unmount } = render(<OnboardingForm />)
+  const { user, unmount } = setupForm()
   await fillValidForm(user)
   await user.click(screen.getByRole('button', { name: 'Submit' }))
   await waitFor(() => expect(submitProfile).toHaveBeenCalledTimes(1))
@@ -332,8 +287,7 @@ test('late success for an edited number cannot authorize submission of an invali
   vi.mocked(checkCorporationNumber)
     .mockReturnValueOnce(stale.promise)
     .mockResolvedValue({ valid: false, message: 'Invalid corporation number' })
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   await fillValidForm(user)
   const input = screen.getByRole('textbox', { name: 'Corporation Number' })
   await user.tab()
@@ -354,20 +308,18 @@ test('late success for an edited number cannot authorize submission of an invali
 
 test('retries unavailable verification on submit and completes without re-entering values', async () => {
   vi.mocked(checkCorporationNumber).mockRejectedValueOnce(new ApiError('timeout', 'Timed out'))
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   await fillValidForm(user)
   await user.tab()
   await screen.findByText('Unable to verify the corporation number. Please try again.')
   await user.click(screen.getByRole('button', { name: 'Submit' }))
-  expect(await screen.findByRole('heading', { name: 'Details submitted' })).toHaveFocus()
+  expect(await screen.findByText('Details submitted successfully.')).toBeVisible()
   expect(checkCorporationNumber).toHaveBeenCalledTimes(2)
   expect(submitProfile).toHaveBeenCalledTimes(1)
 })
 
 test('invalidates the successful cache after editing, including returning to the original number', async () => {
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   const input = screen.getByRole('textbox', { name: 'Corporation Number' })
   await user.type(input, '012345678')
   await user.tab()
@@ -384,8 +336,7 @@ test('invalidates the successful cache after editing, including returning to the
 test('repeated keyboard submit while verification is pending shares one GET and one POST', async () => {
   const pending = deferred<{ valid: true; corporationNumber: string }>()
   vi.mocked(checkCorporationNumber).mockReturnValueOnce(pending.promise)
-  const user = userEvent.setup()
-  render(<OnboardingForm />)
+  const { user } = setupForm()
   await fillValidForm(user)
   const input = screen.getByRole('textbox', { name: 'Corporation Number' })
   await user.keyboard('{Enter}{Enter}')
@@ -395,6 +346,80 @@ test('repeated keyboard submit while verification is pending shares one GET and 
   expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
   expect(submitProfile).not.toHaveBeenCalled()
   await act(async () => pending.resolve({ valid: true, corporationNumber: '012345678' }))
-  expect(await screen.findByRole('heading', { name: 'Details submitted' })).toHaveFocus()
+  expect(await screen.findByText('Details submitted successfully.')).toBeVisible()
   expect(submitProfile).toHaveBeenCalledTimes(1)
+})
+
+test.each([
+  ['First Name', 'firstName is required'],
+  ['Last Name', 'Last name must be shorter'],
+  ['Phone Number', 'Phone number is invalid'],
+  ['Corporation Number', 'Invalid corporation number'],
+])('maps backend validation to %s and preserves values', async (label, message) => {
+  vi.mocked(submitProfile).mockRejectedValueOnce(new ApiError('validation', message))
+  const { user } = setupForm()
+  await fillValidForm(user)
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  const input = screen.getByRole('textbox', { name: label })
+  expect(await screen.findByText(message)).toBeVisible()
+  expect(input).toHaveAccessibleDescription(message)
+  expect(input).toHaveFocus()
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(screen.getByRole('textbox', { name: 'First Name' })).toHaveValue(' Jane ')
+  expect(screen.getByRole('textbox', { name: 'Corporation Number' })).toHaveValue('012345678')
+  if (label === 'Phone Number') {
+    await user.clear(input)
+    await user.type(input, '+14165551234')
+  }
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(await screen.findByText('Details submitted successfully.')).toBeVisible()
+  expect(checkCorporationNumber).toHaveBeenCalledTimes(label === 'Corporation Number' ? 2 : 1)
+  if (label === 'Phone Number') {
+    expect(vi.mocked(submitProfile).mock.calls[1][0].phone).toBe('+14165551234')
+  }
+})
+
+test('keeps ambiguous backend validation at form level', async () => {
+  vi.mocked(submitProfile).mockRejectedValueOnce(new ApiError('validation', 'First name and last name are invalid'))
+  const { user } = setupForm()
+  await fillValidForm(user)
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('First name and last name are invalid')
+  expect(screen.getByRole('textbox', { name: 'First Name' })).not.toHaveAttribute('aria-invalid', 'true')
+})
+
+test('retains submitted values and clears the success message when the user edits', async () => {
+  const { user } = setupForm()
+  await fillValidForm(user)
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(await screen.findByText('Details submitted successfully.')).toBeVisible()
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(submitProfile).toHaveBeenCalledTimes(1)
+  const firstName = screen.getByRole('textbox', { name: 'First Name' })
+  await user.type(firstName, 'Updated')
+  expect(screen.queryByText('Details submitted successfully.')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Submit' })).toBeEnabled()
+  expect(screen.getByRole('textbox', { name: 'Corporation Number' })).toHaveValue('012345678')
+})
+
+test.each(['blur', 'submit'] as const)('rechecks an unchanged invalid number on %s and accepts an updated backend result', async (retry) => {
+  vi.mocked(checkCorporationNumber).mockResolvedValueOnce({ valid: false, message: 'Invalid corporation number' })
+  const { user } = setupForm()
+  await fillValidForm(user)
+  const input = screen.getByRole('textbox', { name: 'Corporation Number' })
+  await user.tab()
+  expect(await screen.findByText('Invalid corporation number', { exact: true })).toBeVisible()
+  expect(input).toHaveAccessibleDescription('Invalid corporation number')
+  expect(submitProfile).not.toHaveBeenCalled()
+
+  if (retry === 'blur') {
+    await user.click(input)
+    await user.tab()
+    await waitFor(() => expect(input).not.toHaveAttribute('aria-invalid', 'true'))
+  }
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(await screen.findByText('Details submitted successfully.')).toBeVisible()
+  expect(checkCorporationNumber).toHaveBeenCalledTimes(2)
+  expect(submitProfile).toHaveBeenCalledTimes(1)
+  expect(input).toHaveValue('012345678')
 })

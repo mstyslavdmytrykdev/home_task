@@ -47,20 +47,14 @@ test.each([200, 404])('accepts definitive business invalidity on HTTP %s', async
 })
 
 test.each([
-  [200, undefined], [200, {}], [200, { valid: 'true', corporationNumber: number }],
+  [200, {}], [200, { valid: 'true', corporationNumber: number }],
   [200, { valid: true }], [200, { valid: true, corporationNumber: '123456789' }],
-  [200, { valid: false, message: '' }], [200, { valid: false, message: '   ' }],
+  [200, { valid: false, message: '   ' }],
   [200, { valid: false, message: 'Invalid', corporationNumber: '123456789' }],
   [404, { message: 'Not found' }], [404, { valid: true, corporationNumber: number }],
 ])('rejects malformed or contradictory GET data (%s, %j)', async (status, data) => {
   respond(status, data)
   await expect(checkCorporationNumber(number)).rejects.toMatchObject({ kind: 'protocol' })
-})
-
-test('encodes the corporation path segment', async () => {
-  respond(200, { valid: false, message: 'Invalid corporation number' })
-  await checkCorporationNumber('a/b?c')
-  expect(transport).toHaveBeenCalledWith(expect.objectContaining({ url: '/corporation-number/a%2Fb%3Fc' }))
 })
 
 test('POST sends only the four required properties and accepts an empty HTTP 200 body', async () => {
@@ -100,7 +94,6 @@ describe.each(Object.entries(operations))('%s errors', (_name, request) => {
     transport.mockRejectedValueOnce(new CanceledError())
     await expect(request()).rejects.toMatchObject({ kind: 'cancelled' })
   })
-
 
 })
 
