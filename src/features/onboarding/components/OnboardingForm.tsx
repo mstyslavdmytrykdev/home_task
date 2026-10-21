@@ -2,16 +2,23 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import { onboardingSchema } from '../model/onboardingSchema'
 import type { OnboardingValues } from '../model/onboardingSchema'
+import { useCorporationValidation } from '../hooks/useCorporationValidation'
 import TextField from '../../../shared/ui/TextField'
 import './onboarding.scss'
 
 export default function OnboardingForm() {
-  const { register, handleSubmit, formState: { errors } } = useForm<OnboardingValues>({
+  const { register, handleSubmit, getValues, getFieldState, setError, clearErrors, formState: { errors } } = useForm<OnboardingValues>({
     resolver: zodResolver(onboardingSchema),
     mode: 'onBlur',
     reValidateMode: 'onBlur',
     defaultValues: { firstName: '', lastName: '', phone: '', corporationNumber: '' },
   })
+
+  const corporation = useCorporationValidation({ getValues, getFieldState, setError, clearErrors })
+  const firstNameField = register('firstName')
+  const lastNameField = register('lastName')
+  const phoneField = register('phone')
+  const corporationField = register('corporationNumber')
 
   return (
     <form
@@ -19,8 +26,11 @@ export default function OnboardingForm() {
       aria-labelledby="onboarding-title"
       noValidate
       onSubmit={(event) => {
-        // Submission will be connected once corporation verification is available.
-        void handleSubmit(() => undefined)(event)
+        // POST submission is added in the next phase.
+        void handleSubmit(
+          async (values) => { await corporation.verify(values.corporationNumber) },
+          async () => { await corporation.verify(getValues('corporationNumber')) },
+        )(event)
       }}
     >
       <h1 id="onboarding-title">Onboarding Form</h1>
@@ -32,7 +42,7 @@ export default function OnboardingForm() {
             maxLength={50}
             required
             error={errors.firstName?.message}
-            {...register('firstName')}
+            {...firstNameField}
           />
           <TextField
             label="Last Name"
@@ -40,7 +50,7 @@ export default function OnboardingForm() {
             maxLength={50}
             required
             error={errors.lastName?.message}
-            {...register('lastName')}
+            {...lastNameField}
           />
         </div>
         <TextField
@@ -49,7 +59,7 @@ export default function OnboardingForm() {
           autoComplete="tel"
           required
           error={errors.phone?.message}
-          {...register('phone')}
+          {...phoneField}
         />
         <TextField
           label="Corporation Number"
@@ -58,8 +68,19 @@ export default function OnboardingForm() {
           maxLength={9}
           required
           error={errors.corporationNumber?.message}
-          {...register('corporationNumber')}
+          {...corporationField}
+          onChange={(event) => {
+            corporation.invalidate()
+            void corporationField.onChange(event)
+          }}
+          onBlur={(event) => {
+            const number = getValues('corporationNumber')
+            void corporationField.onBlur(event).then(() => corporation.verify(number))
+          }}
         />
+        <p className="onboarding-form__status" role="status">
+          {corporation.status === 'checking' ? 'Checking corporation number…' : ''}
+        </p>
       </div>
       <button className="onboarding-form__submit" type="submit">
         Submit <span aria-hidden="true">→</span>

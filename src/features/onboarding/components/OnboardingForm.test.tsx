@@ -1,6 +1,14 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { expect, test } from 'vitest'
+import { beforeEach, expect, test, vi } from 'vitest'
+import { checkCorporationNumber } from '../api/onboardingApi'
+
+vi.mock('../api/onboardingApi', () => ({ checkCorporationNumber: vi.fn(), submitProfile: vi.fn() }))
+
+beforeEach(() => {
+  vi.mocked(checkCorporationNumber).mockReset()
+  vi.mocked(checkCorporationNumber).mockResolvedValue({ valid: true, corporationNumber: '012345678' })
+})
 import OnboardingForm from './OnboardingForm'
 
 test('validates untouched fields on submit and focuses the first invalid field', async () => {
@@ -107,4 +115,107 @@ test('caps pasted corporation input at nine characters while retaining leading z
   await user.click(input)
   await user.paste('0123456789')
   expect(input).toHaveValue('012345678')
+})
+
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: Error) => void
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+  return { promise, resolve, reject }
+}
+
+test.each(['12345678', 'ABC123456', '         '])('does not verify malformed corporation input %j', async (value) => {
+  const user = userEvent.setup()
+  render(<OnboardingForm />)
+  await user.type(screen.getByRole('textbox', { name: 'Corporation Number' }), value)
+  await user.tab()
+  await screen.findByText('Corporation number must be exactly 9 digits')
+  expect(checkCorporationNumber).not.toHaveBeenCalled()
+})
+
+test('shows pending status, caches successful verification and shares blur with submit', async () => {
+  const pending = deferred<{ valid: true; corporationNumber: string }>()
+  vi.mocked(checkCorporationNumber).mockReturnValueOnce(pending.promise)
+  const user = userEvent.setup()
+  render(<OnboardingForm />)
+  const input = screen.getByRole('textbox', { name: 'Corporation Number' })
+  await user.type(input, '123456789')
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(await screen.findByText('Checking corporation number…')).toBeVisible()
+  expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
+  await act(async () => pending.resolve({ valid: true, corporationNumber: '123456789' }))
+  expect(screen.getByRole('status')).toBeEmptyDOMElement()
+  await user.click(input)
+  await user.tab()
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(checkCorporationNumber).toHaveBeenCalledTimes(1)
+})
+
+test('keeps business invalidity in the RHF field error across submit validation', async () => {
+  vi.mocked(checkCorporationNumber).mockResolvedValue({ valid: false, message: 'Invalid corporation number' })
+  const user = userEvent.setup()
+  render(<OnboardingForm />)
+  const input = screen.getByRole('textbox', { name: 'Corporation Number' })
+  await user.type(input, '000000000')
+  await user.tab()
+  expect(await screen.findByText('Invalid corporation number')).toBeVisible()
+  expect(input).toHaveAccessibleDescription('Invalid corporation number')
+  await user.click(screen.getByRole('button', { name: 'Submit' }))
+  expect(await screen.findByText('Invalid corporation number')).toBeVisible()
+  await user.clear(input)
+  expect(screen.queryByText('Invalid corporation number')).not.toBeInTheDocument()
+})
+
+test('distinguishes verification failure and permits retry on blur', async () => {
+  vi.mocked(checkCorporationNumber).mockRejectedValueOnce(new Error('Offline'))
+  const user = userEvent.setup()
+  render(<OnboardingForm />)
+  const input = screen.getByRole('textbox', { name: 'Corporation Number' })
+  await user.type(input, '012345678')
+  await user.tab()
+  expect(await screen.findByText('Unable to verify the corporation number. Please try again.')).toBeVisible()
+  await user.click(input)
+  await user.tab()
+  await waitFor(() => expect(screen.queryByText(/Unable to verify/)).not.toBeInTheDocument())
+  expect(checkCorporationNumber).toHaveBeenCalledTimes(2)
+})
+
+test.each(['invalid', 'failure'] as const)('ignores a stale %s response even after abort', async (outcome) => {
+  const old = deferred<{ valid: false; message: string }>()
+  vi.mocked(checkCorporationNumber).mockReturnValueOnce(old.promise)
+  const user = userEvent.setup()
+  render(<OnboardingForm />)
+  const input = screen.getByRole('textbox', { name: 'Corporation Number' })
+  await user.type(input, '000000000')
+  await user.tab()
+  await waitFor(() => expect(checkCorporationNumber).toHaveBeenCalledTimes(1))
+  const signal = vi.mocked(checkCorporationNumber).mock.calls[0][1]
+  await user.clear(input)
+  expect(signal?.aborted).toBe(true)
+  await user.type(input, '012345678')
+  await user.tab()
+  await waitFor(() => expect(checkCorporationNumber).toHaveBeenCalledTimes(2))
+  await act(async () => {
+    if (outcome === 'invalid') old.resolve({ valid: false, message: 'Stale invalid result' })
+    else old.reject(new Error('Stale failure'))
+  })
+  expect(input).not.toHaveAttribute('aria-invalid', 'true')
+  expect(screen.queryByText('Stale invalid result')).not.toBeInTheDocument()
+  expect(screen.queryByText(/Unable to verify/)).not.toBeInTheDocument()
+  expect(input).toHaveValue('012345678')
+})
+
+test('aborts pending verification on unmount', async () => {
+  const pending = deferred<{ valid: true; corporationNumber: string }>()
+  vi.mocked(checkCorporationNumber).mockReturnValueOnce(pending.promise)
+  const user = userEvent.setup()
+  const { unmount } = render(<OnboardingForm />)
+  await user.type(screen.getByRole('textbox', { name: 'Corporation Number' }), '012345678')
+  await user.tab()
+  await waitFor(() => expect(checkCorporationNumber).toHaveBeenCalledTimes(1))
+  const signal = vi.mocked(checkCorporationNumber).mock.calls[0][1]
+  unmount()
+  expect(signal?.aborted).toBe(true)
+  await act(async () => pending.resolve({ valid: true, corporationNumber: '012345678' }))
 })

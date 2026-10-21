@@ -41,6 +41,15 @@
     gap: 1.5rem;
   }
 
+  &__status {
+    margin: 0;
+    font-size: 0.875rem;
+
+    &:empty {
+      display: none;
+    }
+  }
+
   &__submit {
     display: flex;
     align-items: center;
