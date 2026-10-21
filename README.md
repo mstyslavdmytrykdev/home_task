@@ -4,7 +4,7 @@ React + TypeScript form using Vite, SCSS, React Hook Form, Zod, libphonenumber-j
 
 ## Development
 
-Use a current Node.js 22 LTS release.
+Requires Node.js 22.12 or later.
 
 ```sh
 npm ci
